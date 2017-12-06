@@ -1,55 +1,130 @@
-import { ApolloLink, Observable, RequestHandler } from 'apollo-link';
+import { ApolloLink, Observable, RequestHandler, Operation } from 'apollo-link';
 import { print } from 'graphql/language/printer';
 
 // types
-import { ExecutionResult } from 'graphql';
 import { ApolloFetch } from 'apollo-fetch';
+
+export namespace HttpLink {
+  /**
+   * A function that generates the URI to use when fetching a particular operation.
+   */
+  export interface UriFunction {
+    (operation: Operation): string;
+  }
+
+  export interface Options {
+    /**
+     * The URI to use when fetching operations.
+     *
+     * Defaults to '/graphql'.
+     */
+    uri?: string | UriFunction;
+
+    /**
+     * Passes the extensions field to your graphql server.
+     *
+     * Defaults to false.
+     */
+    includeExtensions?: boolean;
+
+    /**
+     * A `fetch`-compatible API to use when making requests.
+     */
+    fetch?: GlobalFetch['fetch'];
+
+    /**
+     * An object representing values to be sent as headers on the request.
+     */
+    headers?: any;
+
+    /**
+     * The credentials policy you want to use for the fetch call.
+     */
+    credentials?: string;
+
+    /**
+     * Any overrides of the fetch options argument to pass to the fetch call.
+     */
+    fetchOptions?: any;
+  }
+}
+
+// For backwards compatibility.
+export import FetchOptions = HttpLink.Options;
+export import UriFunction = HttpLink.UriFunction;
 
 // XXX replace with actual typings when available
 declare var AbortController: any;
 
-type ResponseError = Error & {
-  response?: Response;
+//Used for any Error for data from the server
+//on a request with a Status >= 300
+//response contains no data or errors
+type ServerError = Error & {
+  response: Response;
+  result: Record<string, any>;
+  statusCode: number;
+};
+
+//Thrown when server's resonse is cannot be parsed
+type ServerParseError = Error & {
+  response: Response;
+  statusCode: number;
+  bodyText: string;
+};
+
+type ClientParseError = Error & {
   parseError: Error;
-  statusCode?: number;
+};
+
+const throwServerError = (response, result, message) => {
+  const error = new Error(message) as ServerError;
+
+  error.response = response;
+  error.statusCode = response.status;
+  error.result = result;
+
+  throw error;
 };
 
 const parseAndCheckResponse = request => (response: Response) => {
   return response
-    .json()
+    .text()
+    .then(bodyText => {
+      try {
+        return JSON.parse(bodyText);
+      } catch (err) {
+        const parseError = err as ServerParseError;
+        parseError.response = response;
+        parseError.statusCode = response.status;
+        parseError.bodyText = bodyText;
+        return Promise.reject(parseError);
+      }
+    })
     .then(result => {
-      if (response.status >= 300)
-        throw new Error(
+      if (response.status >= 300) {
+        //Network error
+        throwServerError(
+          response,
+          result,
           `Response not successful: Received status code ${response.status}`,
         );
+      }
       if (!result.hasOwnProperty('data') && !result.hasOwnProperty('errors')) {
-        throw new Error(
+        //Data error
+        throwServerError(
+          response,
+          result,
           `Server response was missing for query '${request.operationName}'.`,
         );
       }
       return result;
-    })
-    .catch(e => {
-      const httpError = new Error(
-        `Network request failed with status ${response.status} - "${response.statusText}"`,
-      ) as ResponseError;
-      httpError.response = response;
-      httpError.parseError = e;
-      httpError.statusCode = response.status;
-
-      throw httpError;
     });
 };
 
 const checkFetcher = (fetcher: ApolloFetch | GlobalFetch['fetch']) => {
-  if (
-    (fetcher as ApolloFetch).use &&
-    (fetcher as ApolloFetch).useAfter &&
-    (fetcher as ApolloFetch).batchUse &&
-    (fetcher as ApolloFetch).batchUseAfter
-  ) {
+  if ((fetcher as ApolloFetch).use) {
     throw new Error(`
-      It looks like you're using apollo-fetch! Apollo Link now uses the native fetch
+      It looks like you're using apollo-fetch! Apollo Link now uses native fetch
       implementation, so apollo-fetch is not needed. If you want to use your existing
       apollo-fetch middleware, please check this guide to upgrade:
         https://github.com/apollographql/apollo-link/blob/master/docs/implementation.md
@@ -84,21 +159,18 @@ const createSignalIfSupported = () => {
   return { controller, signal };
 };
 
-export interface FetchOptions {
-  uri?: string;
-  fetch?: GlobalFetch['fetch'];
-  includeExtensions?: boolean;
-  credentials?: string;
-  headers?: any;
-  fetchOptions?: any;
-}
+const defaultHttpOptions = {
+  includeQuery: true,
+  includeExtensions: false,
+};
+
 export const createHttpLink = (
   {
     uri,
     fetch: fetcher,
     includeExtensions,
     ...requestOptions,
-  }: FetchOptions = {},
+  }: HttpLink.Options = {},
 ) => {
   // dev warnings to ensure fetch is present
   warnIfNoFetch(fetcher);
@@ -116,15 +188,17 @@ export const createHttpLink = (
           credentials,
           fetchOptions = {},
           uri: contextURI,
+          http: httpOptions = {},
         } = operation.getContext();
         const { operationName, extensions, variables, query } = operation;
+        const http = { ...defaultHttpOptions, ...httpOptions };
+        const body = { operationName, variables };
 
-        const body = {
-          operationName,
-          variables,
-          query: print(query),
-        };
-        if (includeExtensions) (body as any).extensions = extensions;
+        if (includeExtensions || http.includeExtensions)
+          (body as any).extensions = extensions;
+
+        // not sending the query (i.e persisted queries)
+        if (http.includeQuery) (body as any).query = print(query);
 
         let serializedBody;
         try {
@@ -132,7 +206,7 @@ export const createHttpLink = (
         } catch (e) {
           const parseError = new Error(
             `Network request failed. Payload is not serializable: ${e.message}`,
-          ) as ResponseError;
+          ) as ClientParseError;
           parseError.parseError = e;
           throw parseError;
         }
@@ -140,7 +214,7 @@ export const createHttpLink = (
         let options = fetchOptions;
         if (requestOptions.fetchOptions)
           options = { ...requestOptions.fetchOptions, ...options };
-        const fetcherOptions = {
+        const fetcherOptions: any = {
           method: 'POST',
           ...options,
           headers: {
@@ -196,12 +270,7 @@ export const createHttpLink = (
 
 export class HttpLink extends ApolloLink {
   public requester: RequestHandler;
-  constructor(opts: FetchOptions) {
-    super();
-    this.requester = createHttpLink(opts).request;
-  }
-
-  public request(op): Observable<ExecutionResult> | null {
-    return this.requester(op);
+  constructor(opts?: HttpLink.Options) {
+    super(createHttpLink(opts).request);
   }
 }

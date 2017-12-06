@@ -1,6 +1,6 @@
 {
   "name": "apollo-link-batch-http",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Batch HTTP transport layer for GraphQL",
   "author": "Evans Hauser <evanshauser@gmail.com>",
   "contributors": [
@@ -11,9 +11,9 @@
   ],
   "license": "MIT",
   "main": "./lib/bundle.umd.js",
-  "module": "./lib/batchHttpLink.js",
-  "jsnext:main": "./lib/batchHttpLink.js",
-  "typings": "./lib/batchHttpLink.d.ts",
+  "module": "./lib/index.js",
+  "jsnext:main": "./lib/index.js",
+  "typings": "./lib/index.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/apollographql/apollo-link.git"
@@ -27,6 +27,7 @@
       "browserify ./lib/bundle.umd.js -o=./lib/bundle.js --i apollo-link && npm run minify:browser",
     "build": "tsc -p .",
     "bundle": "rollup -c",
+    "coverage": "jest --coverage",
     "clean": "rimraf lib/* && rimraf coverage/*",
     "filesize": "npm run build && npm run build:browser",
     "lint":
@@ -40,18 +41,17 @@
     "watch": "tsc -w -p ."
   },
   "dependencies": {
-    "apollo-fetch": "^0.6.0",
-    "apollo-link-batch": "^1.0.0",
+    "apollo-fetch": "^0.7.0",
+    "apollo-link": "^1.0.4",
+    "apollo-link-batch": "^1.0.2",
     "graphql": "^0.11.0"
   },
   "peerDependencies": {
-    "apollo-link": "^1.0.0",
     "graphql": "^0.11.0"
   },
   "devDependencies": {
-    "@types/graphql": "0.11.5",
-    "@types/jest": "21.1.5",
-    "apollo-link": "^1.0.0",
+    "@types/graphql": "0.11.7",
+    "@types/jest": "21.1.8",
     "browserify": "14.5.0",
     "fetch-mock": "5.13.1",
     "graphql": "0.11.7",
@@ -59,11 +59,11 @@
     "jest": "21.2.1",
     "proxyquire": "1.8.0",
     "rimraf": "2.6.1",
-    "rollup": "0.51.2",
-    "ts-jest": "21.2.1",
+    "rollup": "0.52.1",
+    "ts-jest": "21.2.4",
     "tslint": "5.8.0",
-    "typescript": "2.6.1",
-    "uglify-js": "3.1.8"
+    "typescript": "2.6.2",
+    "uglify-js": "3.2.1"
   },
   "jest": {
     "transform": {

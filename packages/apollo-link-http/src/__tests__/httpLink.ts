@@ -2,6 +2,7 @@ import { Observable, ApolloLink, execute } from 'apollo-link';
 import { print } from 'graphql';
 import gql from 'graphql-tag';
 import * as fetchMock from 'fetch-mock';
+import objectToQuery from 'object-to-querystring';
 
 import { HttpLink, createHttpLink } from '../httpLink';
 
@@ -396,28 +397,58 @@ describe('HttpLink', () => {
       done();
     });
   });
+  it('allows uri to be a function', done => {
+    const variables = { params: 'stub' };
+    const customFetch = (uri, options) => {
+      const { operationName } = JSON.parse(options.body);
+      expect(operationName).toBe('SampleQuery');
+      return fetch('dataFunc', options);
+    };
+
+    const link = createHttpLink({ fetch: customFetch });
+
+    execute(link, { query: sampleQuery, variables }).subscribe(result => {
+      const uri = fetchMock.lastUrl();
+      expect(fetchMock.lastUrl()).toBe('dataFunc');
+      done();
+    });
+  });
   it('adds fetchOptions to the request from the setup', done => {
     const variables = { params: 'stub' };
     const link = createHttpLink({
       uri: 'data',
-      fetchOptions: { signal: 'foo' },
+      fetchOptions: { signal: 'foo', mode: 'no-cors' },
     });
 
     execute(link, { query: sampleQuery, variables }).subscribe(result => {
-      const signal = fetchMock.lastCall()[1].signal;
+      const { signal, mode, headers } = fetchMock.lastCall()[1];
       expect(signal).toBe('foo');
+      expect(mode).toBe('no-cors');
+      expect(headers['content-type']).toBe('application/json');
       done();
     });
   });
   it('supports using a GET request', done => {
     const variables = { params: 'stub' };
+
+    let requestedString;
+    const customFetch = (uri, options) => {
+      const { body, ...newOptions } = options;
+      const queryString = objectToQuery(JSON.parse(body));
+      requestedString = uri + queryString;
+      return fetch(requestedString, newOptions);
+    };
     const link = createHttpLink({
       uri: 'data',
       fetchOptions: { method: 'GET' },
+      fetch: customFetch,
     });
 
     execute(link, { query: sampleQuery, variables }).subscribe(result => {
-      const method = fetchMock.lastCall()[1].method;
+      const [uri, options] = fetchMock.lastCall();
+      const { method, body, ...rest } = options;
+      expect(body).toBeUndefined();
+
       expect(method).toBe('GET');
       done();
     });
@@ -478,6 +509,27 @@ describe('HttpLink', () => {
       done();
     });
   });
+  it('allows for not sending the query with the request', done => {
+    const variables = { params: 'stub' };
+    const middleware = new ApolloLink((operation, forward) => {
+      operation.setContext({
+        http: {
+          includeQuery: false,
+          includeExtensions: true,
+        },
+      });
+      operation.extensions.persistedQuery = { hash: '1234' };
+      return forward(operation);
+    });
+    const link = middleware.concat(createHttpLink({ uri: 'data' }));
+
+    execute(link, { query: sampleQuery, variables }).subscribe(result => {
+      const body = JSON.parse(fetchMock.lastCall()[1].body);
+      expect(body.query).not.toBeDefined();
+      expect(body.extensions).toEqual({ persistedQuery: { hash: '1234' } });
+      done();
+    });
+  });
 });
 
 describe('dev warnings', () => {
@@ -514,52 +566,27 @@ describe('dev warnings', () => {
 });
 
 describe('error handling', () => {
-  const json = jest.fn(() => Promise.resolve({}));
+  let responseBody;
+  const text = jest.fn(() => {
+    const responseBodyText = '{}';
+    responseBody = JSON.parse(responseBodyText);
+    return Promise.resolve(responseBodyText);
+  });
   const fetch = jest.fn((uri, options) => {
-    return Promise.resolve({ json });
+    return Promise.resolve({ text });
   });
-  it('throws an error if response code is > 300', done => {
-    fetch.mockReturnValueOnce(Promise.resolve({ status: 400, json }));
-    const link = createHttpLink({ uri: 'data', fetch });
-
-    execute(link, { query: sampleQuery }).subscribe(
-      result => {
-        done.fail('error should have been thrown from the network');
-      },
-      e => {
-        expect(e.parseError.message).toMatch(/Received status code 400/);
-        expect(e.statusCode).toBe(400);
-        done();
-      },
-    );
-  });
-  it('throws an error if empty response from the server ', done => {
-    fetch.mockReturnValueOnce(Promise.resolve({ json }));
-    json.mockReturnValueOnce(Promise.resolve({ body: 'boo' }));
-    const link = createHttpLink({ uri: 'data', fetch });
-
-    execute(link, { query: sampleQuery }).subscribe(
-      result => {
-        done.fail('error should have been thrown from the network');
-      },
-      e => {
-        expect(e.parseError.message).toMatch(
-          /Server response was missing for query 'SampleQuery'/,
-        );
-        done();
-      },
-    );
+  beforeEach(() => {
+    fetch.mockReset();
   });
   it('makes it easy to do stuff on a 401', done => {
-    fetch.mockReturnValueOnce(Promise.resolve({ status: 401, json }));
-
     const middleware = new ApolloLink((operation, forward) => {
       return new Observable(ob => {
+        fetch.mockReturnValueOnce(Promise.resolve({ status: 401, text }));
         const op = forward(operation);
         const sub = op.subscribe({
           next: ob.next.bind(ob),
           error: e => {
-            expect(e.parseError.message).toMatch(/Received status code 401/);
+            expect(e.message).toMatch(/Received status code 401/);
             expect(e.statusCode).toEqual(401);
             ob.error(e);
             done();
@@ -582,8 +609,42 @@ describe('error handling', () => {
       () => {},
     );
   });
+
+  it('throws an error if response code is > 300', done => {
+    fetch.mockReturnValueOnce(Promise.resolve({ status: 400, text }));
+    const link = createHttpLink({ uri: 'data', fetch });
+
+    execute(link, { query: sampleQuery }).subscribe(
+      result => {
+        done.fail('error should have been thrown from the network');
+      },
+      e => {
+        expect(e.message).toMatch(/Received status code 400/);
+        expect(e.statusCode).toBe(400);
+        expect(e.result).toEqual(responseBody);
+        done();
+      },
+    );
+  });
+  it('throws an error if empty response from the server ', done => {
+    fetch.mockReturnValueOnce(Promise.resolve({ text }));
+    text.mockReturnValueOnce(Promise.resolve('{ "body": "boo" }'));
+    const link = createHttpLink({ uri: 'data', fetch });
+
+    execute(link, { query: sampleQuery }).subscribe(
+      result => {
+        done.fail('error should have been thrown from the network');
+      },
+      e => {
+        expect(e.message).toMatch(
+          /Server response was missing for query 'SampleQuery'/,
+        );
+        done();
+      },
+    );
+  });
   it("throws if the body can't be stringified", done => {
-    fetch.mockReturnValueOnce(Promise.resolve({ data: {}, json }));
+    fetch.mockReturnValueOnce(Promise.resolve({ data: {}, text }));
     const link = createHttpLink({ uri: 'data', fetch });
 
     let b;
@@ -618,8 +679,10 @@ describe('error handling', () => {
 
     global.AbortController = AbortController;
 
-    fetch.mockReturnValueOnce(Promise.resolve({ json }));
-    json.mockReturnValueOnce(Promise.resolve({ data: { hello: 'world' } }));
+    fetch.mockReturnValueOnce(Promise.resolve({ text }));
+    text.mockReturnValueOnce(
+      Promise.resolve('{ "data": { "hello": "world" } }'),
+    );
 
     const link = createHttpLink({ uri: 'data', fetch });
 
@@ -634,13 +697,35 @@ describe('error handling', () => {
         done.fail('complete should not have been called');
       },
     });
-
     sub.unsubscribe();
 
     setTimeout(() => {
       delete global.AbortController;
       expect(called).toBe(true);
+      fetch.mockReset();
+      text.mockReset();
       done();
     }, 150);
+  });
+  const body = '{';
+  const unparsableJson = jest.fn(() => Promise.resolve(body));
+  it('throws an error if response is unparsable', done => {
+    fetch.mockReturnValueOnce(
+      Promise.resolve({ status: 400, text: unparsableJson }),
+    );
+    const link = createHttpLink({ uri: 'data', fetch });
+
+    execute(link, { query: sampleQuery }).subscribe(
+      result => {
+        done.fail('error should have been thrown from the network');
+      },
+      e => {
+        expect(e.message).toMatch(/JSON/);
+        expect(e.statusCode).toBe(400);
+        expect(e.response).toBeDefined();
+        expect(e.bodyText).toBe(body);
+        done();
+      },
+    );
   });
 });

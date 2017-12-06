@@ -1,6 +1,6 @@
 {
   "name": "apollo-link-dedup",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Deduplicates queries that are currently on the wire",
   "author": "Evans Hauser <evanshauser@gmail.com>",
   "contributors": [
@@ -11,9 +11,9 @@
   ],
   "license": "MIT",
   "main": "./lib/bundle.umd.js",
-  "module": "./lib/dedupLink.js",
-  "jsnext:main": "./lib/dedupLink.js",
-  "typings": "./lib/dedupLink.d.ts",
+  "module": "./lib/index.js",
+  "jsnext:main": "./lib/index.js",
+  "typings": "./lib/index.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/apollographql/apollo-link.git"
@@ -28,6 +28,7 @@
     "build": "tsc -p .",
     "bundle": "rollup -c",
     "clean": "rimraf lib/* && rimraf coverage/*",
+    "coverage": "jest --coverage",
     "filesize": "npm run build && npm run build:browser",
     "lint":
       "tslint --type-check -p tsconfig.json -c ../../tslint.json src/*.ts",
@@ -39,23 +40,22 @@
     "test": "jest",
     "watch": "tsc -w -p ."
   },
-  "peerDependencies": {
-    "apollo-link": "^1.0.0"
+  "dependencies": {
+    "apollo-link": "^1.0.4"
   },
   "devDependencies": {
-    "@types/graphql": "0.11.5",
-    "@types/jest": "21.1.5",
-    "apollo-link": "^1.0.0",
+    "@types/graphql": "0.11.7",
+    "@types/jest": "21.1.8",
     "browserify": "14.5.0",
     "graphql": "0.11.7",
     "graphql-tag": "2.5.0",
     "jest": "21.2.1",
     "rimraf": "2.6.1",
-    "rollup": "0.51.2",
-    "ts-jest": "21.2.1",
+    "rollup": "0.52.1",
+    "ts-jest": "21.2.4",
     "tslint": "5.8.0",
-    "typescript": "2.6.1",
-    "uglify-js": "3.1.8"
+    "typescript": "2.6.2",
+    "uglify-js": "3.2.1"
   },
   "jest": {
     "transform": {
